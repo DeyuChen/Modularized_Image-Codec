@@ -4,8 +4,9 @@ void Matrix_Quantizer::quantize(Mat &src, Mat &dst){
     int nchannel = src.channels();
     vector<Mat> cdst(nchannel);
     split(src, cdst);
+    Mat sub_matrix = matrix(Rect(0, 0, src.cols, src.rows));
     for (int k = 0; k < nchannel; k++){
-        divide(cdst[k], matrix, cdst[k]);
+        divide(cdst[k], sub_matrix, cdst[k]);
         for (int i = 0; i < src.rows; i++){
             for (int j = 0; j < src.cols; j++){
                 cdst[k].at<float>(i, j) = round(cdst[k].at<float>(i, j));
@@ -19,8 +20,9 @@ void Matrix_Quantizer::scale(Mat &src, Mat &dst){
     int nchannel = src.channels();
     vector<Mat> cdst(nchannel);
     split(src, cdst);
+    Mat sub_matrix = matrix(Rect(0, 0, src.cols, src.rows));
     for (int i = 0; i < nchannel; i++){
-        multiply(cdst[i], matrix, cdst[i]);
+        multiply(cdst[i], sub_matrix, cdst[i]);
     }
     merge(cdst, dst);
 }

@@ -32,30 +32,8 @@ void DCT_Transformer::transform_channel(Mat &src, Mat &dst, bool inverse){
     if (inverse){
         flag = DCT_INVERSE;
     }
-
-    dst.create(src.rows, src.cols, CV_32F);
-
-    int row_rmd = src.rows % blocksize;
-    int col_rmd = src.cols % blocksize;
-    int x = 0;
-    for (int i = 0; i < src.rows / blocksize; i++, x += blocksize){
-        int y = 0;
-        for (int j = 0; j < src.cols / blocksize; j++, y += blocksize){
-            dct(src(Rect(x, y, blocksize, blocksize)), dst(Rect(x, y, blocksize, blocksize)), flag);
-        }
-        if (col_rmd){
-            dct(src(Rect(x, y, blocksize, col_rmd)), dst(Rect(x, y, blocksize, col_rmd)), flag);
-        }
-    }
-    if (row_rmd){
-        int y = 0;
-        for (int j = 0; j < src.cols / blocksize; j++, y += blocksize){
-            dct(src(Rect(x, y, row_rmd, blocksize)), dst(Rect(x, y, row_rmd, blocksize)), flag);
-        }
-        if (col_rmd){
-            dct(src(Rect(x, y, row_rmd, col_rmd)), dst(Rect(x, y, row_rmd, col_rmd)), flag);
-        }
-    }
+    
+    dct(src, dst, flag);
 
     return;
 }
