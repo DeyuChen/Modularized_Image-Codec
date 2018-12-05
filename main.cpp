@@ -6,99 +6,20 @@
 
 #include "dct_transformer.h"
 #include "matrix_quantizer.h"
+#include "zigzag_reorderer.h"
 
 using namespace cv;
 using namespace std;
 
-class Reorderer {
-public:
-    virtual void reorder_2D_to_1D(Mat &src, Mat &dst) = 0;
-    virtual void reorder_1D_to_2D(Mat &src, Mat &dst, int width, int height) = 0;
-};
-
-template <class T>
-class ZigZag_Reorderer : public Reorderer {
-public:
-    void reorder_2D_to_1D(Mat &src, Mat &dst);
-    void reorder_1D_to_2D(Mat &src, Mat &dst, int width, int height);
-};
-
-template <class T>
-void ZigZag_Reorderer<T>::reorder_2D_to_1D(Mat &src, Mat &dst){
-    dst.create(1, src.rows * src.cols, src.type());
-
-    int x = 0, y = 0, i = 1;
-    int xm = src.cols - 1, ym = src.rows - 1;
-    dst.at<T>(0, 0) = src.at<T>(0, 0);
-    while (x < xm || y < ym){
-        if ((x + y) % 2){
-            if (y == ym)
-                x++;
-            else if (x == 0)
-                y++;
-            else {
-                x--;
-                y++;
-            }
-        }
-        else {
-            if (x == xm)
-                y++;
-            else if (y == 0)
-                x++;
-            else {
-                x++;
-                y--;
-            }
-        }
-
-        dst.at<T>(0, i++) = src.at<T>(y, x);
-    }
-}
-
-template <class T>
-void ZigZag_Reorderer<T>::reorder_1D_to_2D(Mat &src, Mat &dst, int width, int height){
-    assert(src.cols == width * height);
-    dst.create(height, width, src.type());
-
-    int x = 0, y = 0, i = 1;
-    int xm = src.cols - 1, ym = src.rows - 1;
-    dst.at<T>(0, 0) = src.at<T>(0, 0);
-    while (x < xm || y < ym){
-        if ((x + y) % 2){
-            if (y == ym)
-                x++;
-            else if (x == 0)
-                y++;
-            else {
-                x--;
-                y++;
-            }
-        }
-        else {
-            if (x == xm)
-                y++;
-            else if (y == 0)
-                x++;
-            else {
-                x++;
-                y--;
-            }
-        }
-
-        dst.at<T>(y, x) = src.at<T>(0, i++);
-    }
-}
-
 class Codec {
 public:
-    Codec(int channels, int blocksize = 8);
+    Codec(int blocksize = 8);
     void encode(Mat &src, Mat &dst);
-    void decode(Mat &src, Mat &dst);
+    void decode(Mat &src, Mat &dst, int width, int height);
 
 private:
     void encode_block(Mat &src, Mat &dst);
-    void decode_block(Mat &src, Mat &dst);
+    void decode_block(Mat &src, Mat &dst, int width, int height);
     string encode_quantization_table(Mat &src);
     string encode_huffman_table();
 
@@ -106,97 +27,137 @@ private:
     Quantizer *quantizer;
     Reorderer *reorderer;
 
-    int channels;
     int blocksize;
 };
 
-Codec::Codec(int channels, int blocksize)
-    : channels(channels), blocksize(blocksize)
+Codec::Codec(int blocksize)
+    : blocksize(blocksize)
 {
     transformer = new DCT_Transformer();
     quantizer = new Matrix_Quantizer_8x8(50);
-    if (channels == 1){
-        reorderer = new ZigZag_Reorderer<float>();
-    }
-    else if (channels == 3){
-        reorderer = new ZigZag_Reorderer<Vec3f>();
-    }
+    reorderer = new ZigZag_Reorderer();
 }
 
 void Codec::encode(Mat &src, Mat &dst){
-    src.convertTo(dst, CV_32F, 1, -128);
+    int nchannel = src.channels();
+    if (nchannel > 1){
+        vector<Mat> csrc(nchannel), cdst(nchannel);
+        split(src, csrc);
+        for (int i = 0; i < nchannel; i++){
+            encode(csrc[i], cdst[i]);
+        }
+        merge(cdst, dst);
 
-    Mat block;
-    int row_rmd = dst.rows % blocksize;
-    int col_rmd = dst.cols % blocksize;
+        return;
+    }
+
+    Mat tmp;
+    src.convertTo(tmp, CV_32F, 1, -128);
+    dst.create(1, tmp.rows * tmp.cols, tmp.type());
+
+    Mat src_block, dst_block;
+    int row_rmd = tmp.rows % blocksize;
+    int col_rmd = tmp.cols % blocksize;
+    int head = 0;
     int y = 0;
-    for (int i = 0; i < dst.rows / blocksize; i++, y += blocksize){
+    for (int i = 0; i < tmp.rows / blocksize; i++, y += blocksize){
         int x = 0;
-        for (int j = 0; j < dst.cols / blocksize; j++, x += blocksize){
-            block = dst(Rect(x, y, blocksize, blocksize));
-            encode_block(block, block);
+        for (int j = 0; j < tmp.cols / blocksize; j++, x += blocksize){
+            src_block = tmp(Rect(x, y, blocksize, blocksize));
+            dst_block = dst(Rect(head, 0, blocksize * blocksize, 1));
+            encode_block(src_block, dst_block);
+            head += blocksize * blocksize;
         }
         if (col_rmd){
-            block = dst(Rect(x, y, col_rmd, blocksize));
-            encode_block(block, block);
+            src_block = tmp(Rect(x, y, col_rmd, blocksize));
+            dst_block = dst(Rect(head, 0, col_rmd * blocksize, 1));
+            encode_block(src_block, dst_block);
+            head += col_rmd * blocksize;
         }
     }
     if (row_rmd){
         int x = 0;
-        for (int j = 0; j < dst.cols / blocksize; j++, x += blocksize){
-            block = dst(Rect(x, y, blocksize, row_rmd));
-            encode_block(block, block);
+        for (int j = 0; j < tmp.cols / blocksize; j++, x += blocksize){
+            src_block = tmp(Rect(x, y, blocksize, row_rmd));
+            dst_block = dst(Rect(head, 0, blocksize * row_rmd, 1));
+            encode_block(src_block, dst_block);
+            head += blocksize * row_rmd;
         }
         if (col_rmd){
-            block = dst(Rect(x, y, col_rmd, row_rmd));
-            encode_block(block, block);
+            src_block = tmp(Rect(x, y, col_rmd, row_rmd));
+            dst_block = dst(Rect(head, 0, col_rmd * row_rmd, 1));
+            encode_block(src_block, dst_block);
+            head += col_rmd * row_rmd;
         }
     }
 }
 
-void Codec::decode(Mat &src, Mat &dst){
-    dst = src;
+void Codec::decode(Mat &src, Mat &dst, int width, int height){
+    int nchannel = src.channels();
+    if (nchannel > 1){
+        vector<Mat> csrc(nchannel), cdst(nchannel);
+        split(src, csrc);
+        for (int i = 0; i < nchannel; i++){
+            decode(csrc[i], cdst[i], width, height);
+        }
+        merge(cdst, dst);
 
-    Mat block;
+        return;
+    }
+
+    dst.create(height, width, src.type());
+
+
+    Mat src_block, dst_block;
     int row_rmd = dst.rows % blocksize;
     int col_rmd = dst.cols % blocksize;
+    int head = 0;
     int y = 0;
     for (int i = 0; i < dst.rows / blocksize; i++, y += blocksize){
         int x = 0;
         for (int j = 0; j < dst.cols / blocksize; j++, x += blocksize){
-            block = dst(Rect(x, y, blocksize, blocksize));
-            decode_block(block, block);
+            src_block = src(Rect(head, 0, blocksize * blocksize, 1));
+            dst_block = dst(Rect(x, y, blocksize, blocksize));
+            decode_block(src_block, dst_block, blocksize, blocksize);
+            head += blocksize * blocksize;
         }
         if (col_rmd){
-            block = dst(Rect(x, y, col_rmd, blocksize));
-            decode_block(block, block);
+            src_block = src(Rect(head, 0, col_rmd * blocksize, 1));
+            dst_block = dst(Rect(x, y, col_rmd, blocksize));
+            decode_block(src_block, dst_block, col_rmd, blocksize);
+            head += col_rmd * blocksize;
         }
     }
     if (row_rmd){
         int x = 0;
         for (int j = 0; j < dst.cols / blocksize; j++, x += blocksize){
-            block = dst(Rect(x, y, blocksize, row_rmd));
-            decode_block(block, block);
+            src_block = src(Rect(head, 0, blocksize * row_rmd, 1));
+            dst_block = dst(Rect(x, y, blocksize, row_rmd));
+            decode_block(src_block, dst_block, blocksize, row_rmd);
+            head += blocksize * row_rmd;
         }
         if (col_rmd){
-            block = dst(Rect(x, y, col_rmd, row_rmd));
-            decode_block(block, block);
+            src_block = src(Rect(head, 0, col_rmd * row_rmd, 1));
+            dst_block = dst(Rect(x, y, col_rmd, row_rmd));
+            decode_block(src_block, dst_block, col_rmd, row_rmd);
+            head += col_rmd * row_rmd;
         }
     }
 
-    dst.convertTo(dst, CV_8UC3, 1, 128);
+    dst.convertTo(dst, CV_8UC1, 1, 128);
 }
 
 void Codec::encode_block(Mat &src, Mat &dst){
     Mat tmp;
     transformer->transform(src, tmp);
-    quantizer->quantize(tmp, dst);
-    reorderer->reorder_2D_to_1D(dst, tmp);
+    quantizer->quantize(tmp, tmp);
+    reorderer->reorder_2D_to_1D(tmp, dst);
 }
 
-void Codec::decode_block(Mat &src, Mat &dst){
+void Codec::decode_block(Mat &src, Mat &dst, int width, int height){
     Mat tmp;
-    quantizer->scale(src, tmp);
+    reorderer->reorder_1D_to_2D(src, tmp, width, height);
+    quantizer->scale(tmp, tmp);
     transformer->inverse_transform(tmp, dst);
 }
 
@@ -216,19 +177,18 @@ int main(int argc, char** argv){
         return -1;
     }
 
-    Codec codec(image.channels());
+    Codec codec;
     Mat image2, fimage, freq;
 
     codec.encode(image, fimage);
-    fimage.convertTo(freq, CV_8UC1);
-    codec.decode(fimage, image2);
-
+    //fimage.convertTo(freq, CV_8UC1);
+    codec.decode(fimage, image2, image.cols, image.rows);
 
     namedWindow("Original Image", WINDOW_AUTOSIZE);
-    namedWindow("Frequency Domain Image", WINDOW_AUTOSIZE);
+    //namedWindow("Frequency Domain Image", WINDOW_AUTOSIZE);
     namedWindow("Decoded Image", WINDOW_AUTOSIZE);
     imshow("Original Image", image);
-    imshow("Frequency Domain Image", freq);
+    //imshow("Frequency Domain Image", freq);
     imshow("Decoded Image", image2);
     waitKey(0);
     

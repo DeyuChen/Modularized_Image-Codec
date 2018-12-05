@@ -9,18 +9,7 @@ void DCT_Transformer::inverse_transform(Mat &src, Mat &dst){
 }
 
 void DCT_Transformer::transform(Mat &src, Mat &dst, bool inverse){
-    int nchannel = src.channels();
-    if (nchannel == 1){
-        transform_channel(src, dst, inverse);
-    }
-    else {
-        vector<Mat> csrc(nchannel), cdst(nchannel);
-        split(src, csrc);
-        for (int i = 0; i < nchannel; i++){
-            transform_channel(csrc[i], cdst[i], inverse);
-        }
-        merge(cdst, dst);
-    }
+    transform_channel(src, dst, inverse);
 
     return;
 }

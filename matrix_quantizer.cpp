@@ -1,30 +1,18 @@
 #include "matrix_quantizer.h"
 
 void Matrix_Quantizer::quantize(Mat &src, Mat &dst){
-    int nchannel = src.channels();
-    vector<Mat> cdst(nchannel);
-    split(src, cdst);
     Mat sub_matrix = matrix(Rect(0, 0, src.cols, src.rows));
-    for (int k = 0; k < nchannel; k++){
-        divide(cdst[k], sub_matrix, cdst[k]);
-        for (int i = 0; i < src.rows; i++){
-            for (int j = 0; j < src.cols; j++){
-                cdst[k].at<float>(i, j) = round(cdst[k].at<float>(i, j));
-            }
+    divide(src, sub_matrix, dst);
+    for (int i = 0; i < src.rows; i++){
+        for (int j = 0; j < src.cols; j++){
+            dst.at<float>(i, j) = round(dst.at<float>(i, j));
         }
     }
-    merge(cdst, dst);
 }
 
 void Matrix_Quantizer::scale(Mat &src, Mat &dst){
-    int nchannel = src.channels();
-    vector<Mat> cdst(nchannel);
-    split(src, cdst);
     Mat sub_matrix = matrix(Rect(0, 0, src.cols, src.rows));
-    for (int i = 0; i < nchannel; i++){
-        multiply(cdst[i], sub_matrix, cdst[i]);
-    }
-    merge(cdst, dst);
+    multiply(src, sub_matrix, dst);
 }
 
 Matrix_Quantizer_8x8::Matrix_Quantizer_8x8(int quality){
